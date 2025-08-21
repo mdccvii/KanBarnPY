@@ -3,13 +3,21 @@ from nextcord.ext import commands
 from nextcord.ui import Modal, TextInput
 from nextcord import Embed
 import json
+import os
 
 intents = nextcord.Intents.default()
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Load configuration
-with open('Config.json', 'r') as f:
-    config = json.load(f)
+try:
+    with open('Config.json', 'r') as f:
+        config = json.load(f)
+except FileNotFoundError:
+    print("Error: Config.json file not found!")
+    config = {"homework_channel_id": None, "notification_role_id": None}
+except json.JSONDecodeError:
+    print("Error: Invalid JSON in Config.json!")
+    config = {"homework_channel_id": None, "notification_role_id": None}
 
 homework_list = []
 
@@ -70,9 +78,16 @@ class HomeworkModal(Modal):
         if self.image_url.value:
             embed.set_image(url=self.image_url.value)
         
-        channel_id = config['homework_channel_id']
-        channel = bot.get_channel(channel_id)
-        await channel.send(embed=embed)
+        try:
+            channel_id = config['homework_channel_id']
+            channel = bot.get_channel(channel_id)
+            if channel:
+                await channel.send(embed=embed)
+                await interaction.response.send_message(f"✅ Homework added successfully! Reference number: {ref_number}", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Error: Homework channel not found.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error adding homework: {str(e)}", ephemeral=True)
 
 @bot.slash_command(name="addhomework", description="Add homework (Admins only)")
 @commands.has_permissions(administrator=True)
@@ -82,13 +97,19 @@ async def add_homework(interaction: nextcord.Interaction):
 
 @bot.slash_command(name="hwnotify", description="Get notification role for homework")
 async def hw_notify(interaction: nextcord.Interaction):
-    role_id = config['notification_role_id']
-    role = interaction.guild.get_role(role_id)
-    if role:
-        await interaction.user.add_roles(role)
-        await interaction.response.send_message("You have been assigned the homework notification role.", ephemeral=True)
-    else:
-        await interaction.response.send_message("Notification role not found.", ephemeral=True)
+    try:
+        role_id = config['notification_role_id']
+        role = interaction.guild.get_role(role_id)
+        if role:
+            if role in interaction.user.roles:
+                await interaction.response.send_message("You already have the homework notification role.", ephemeral=True)
+            else:
+                await interaction.user.add_roles(role)
+                await interaction.response.send_message("✅ You have been assigned the homework notification role.", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Notification role not found.", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error assigning role: {str(e)}", ephemeral=True)
 
 @bot.slash_command(name="hmnhomework", description="Notify the number of homeworks")
 async def hmn_homework(interaction: nextcord.Interaction):
@@ -121,4 +142,4 @@ async def check_hw(interaction: nextcord.Interaction, ref_number: int):
     else:
         await interaction.response.send_message(f"Homework with reference number {ref_number} not found.", ephemeral=True)
 
-bot.run('token')
+bot.run(os.getenv('DISCORD_TOKEN', 'token'))
