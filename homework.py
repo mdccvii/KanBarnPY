@@ -4,22 +4,116 @@ from nextcord.ui import Modal, TextInput
 from nextcord import Embed
 import json
 import os
+import logging
+import aiosqlite
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Configure logging
+log_level = getattr(logging, os.getenv('LOG_LEVEL', 'INFO').upper())
+log_file = os.getenv('LOG_FILE', 'bot.log')
+logging.basicConfig(
+    level=log_level,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 intents = nextcord.Intents.default()
 bot = commands.Bot(command_prefix='!', intents=intents)
+
+# Database configuration
+DATABASE_URL = os.getenv('DATABASE_URL', 'homework.db')
 
 # Load configuration
 try:
     with open('Config.json', 'r') as f:
         config = json.load(f)
+    logger.info("Configuration loaded successfully")
 except FileNotFoundError:
-    print("Error: Config.json file not found!")
+    logger.error("Config.json file not found!")
     config = {"homework_channel_id": None, "notification_role_id": None}
 except json.JSONDecodeError:
-    print("Error: Invalid JSON in Config.json!")
+    logger.error("Invalid JSON in Config.json!")
     config = {"homework_channel_id": None, "notification_role_id": None}
 
 homework_list = []
+
+# Database initialization
+async def init_database():
+    """Initialize the SQLite database for homework storage"""
+    async with aiosqlite.connect(DATABASE_URL) as db:
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS homework (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ref_number INTEGER UNIQUE NOT NULL,
+                subject TEXT NOT NULL,
+                details TEXT NOT NULL,
+                due_date TEXT NOT NULL,
+                type TEXT NOT NULL,
+                image_url TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        await db.commit()
+        logger.info("Database initialized successfully")
+
+async def save_homework_to_db(homework):
+    """Save homework to database"""
+    try:
+        async with aiosqlite.connect(DATABASE_URL) as db:
+            await db.execute('''
+                INSERT INTO homework (ref_number, subject, details, due_date, type, image_url)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                homework['ref_number'],
+                homework['subject'],
+                homework['details'],
+                homework['due_date'],
+                homework['type'],
+                homework['image_url']
+            ))
+            await db.commit()
+            logger.info(f"Homework saved to database: ref #{homework['ref_number']}")
+    except Exception as e:
+        logger.error(f"Error saving homework to database: {e}")
+
+async def load_homework_from_db():
+    """Load all homework from database to memory"""
+    try:
+        async with aiosqlite.connect(DATABASE_URL) as db:
+            async with db.execute('SELECT ref_number, subject, details, due_date, type, image_url FROM homework ORDER BY ref_number') as cursor:
+                rows = await cursor.fetchall()
+                homework_list.clear()
+                for row in rows:
+                    homework = {
+                        'ref_number': row[0],
+                        'subject': row[1],
+                        'details': row[2],
+                        'due_date': row[3],
+                        'type': row[4],
+                        'image_url': row[5]
+                    }
+                    homework_list.append(homework)
+                logger.info(f"Loaded {len(homework_list)} homework items from database")
+    except Exception as e:
+        logger.error(f"Error loading homework from database: {e}")
+
+async def get_next_ref_number():
+    """Get the next reference number for homework"""
+    try:
+        async with aiosqlite.connect(DATABASE_URL) as db:
+            async with db.execute('SELECT MAX(ref_number) FROM homework') as cursor:
+                row = await cursor.fetchone()
+                return (row[0] or 0) + 1
+    except Exception as e:
+        logger.error(f"Error getting next ref number: {e}")
+        return len(homework_list) + 1
 
 # Modal for adding homework
 class HomeworkModal(Modal):
@@ -57,7 +151,7 @@ class HomeworkModal(Modal):
 
     async def callback(self, interaction: nextcord.Interaction):
         # Add homework to the list with a reference number
-        ref_number = len(homework_list) + 1
+        ref_number = await get_next_ref_number()
         homework = {
             "ref_number": ref_number,
             "subject": self.subject.value,
@@ -66,6 +160,9 @@ class HomeworkModal(Modal):
             "type": self.type.value,
             "image_url": self.image_url.value if self.image_url.value else None
         }
+        
+        # Save to database and memory
+        await save_homework_to_db(homework)
         homework_list.append(homework)
         
         # Send embed to the specified channel
@@ -84,10 +181,13 @@ class HomeworkModal(Modal):
             if channel:
                 await channel.send(embed=embed)
                 await interaction.response.send_message(f"✅ Homework added successfully! Reference number: {ref_number}", ephemeral=True)
+                logger.info(f"Homework added successfully: ref #{ref_number}")
             else:
                 await interaction.response.send_message("❌ Error: Homework channel not found.", ephemeral=True)
+                logger.error("Homework channel not found")
         except Exception as e:
             await interaction.response.send_message(f"❌ Error adding homework: {str(e)}", ephemeral=True)
+            logger.error(f"Error adding homework: {e}")
 
 @bot.slash_command(name="addhomework", description="Add homework (Admins only)")
 @commands.has_permissions(administrator=True)
@@ -142,4 +242,21 @@ async def check_hw(interaction: nextcord.Interaction, ref_number: int):
     else:
         await interaction.response.send_message(f"Homework with reference number {ref_number} not found.", ephemeral=True)
 
-bot.run(os.getenv('DISCORD_TOKEN', 'token'))
+@bot.event
+async def on_ready():
+    """Event triggered when bot is ready"""
+    logger.info(f'{bot.user} has connected to Discord!')
+    await init_database()
+    await load_homework_from_db()
+    logger.info(f'Bot is ready with {len(homework_list)} homework items loaded')
+
+# Run the bot
+if __name__ == "__main__":
+    token = os.getenv('DISCORD_TOKEN')
+    if not token:
+        logger.error("DISCORD_TOKEN environment variable not set!")
+        print("Error: Please set DISCORD_TOKEN in your .env file")
+        exit(1)
+    
+    logger.info("Starting bot...")
+    bot.run(token)

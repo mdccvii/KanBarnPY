@@ -1,0 +1,24 @@
+{
+  "name": "KanBarnPY - Discord Homework Bot",
+  "description": "A Discord bot for managing homework assignments with persistent storage",
+  "repository": "https://github.com/mdccvii/KanBarnPY",
+  "logo": "https://raw.githubusercontent.com/mdccvii/KanBarnPY/main/.github/logo.png",
+  "keywords": ["discord", "bot", "homework", "education", "python"],
+  "stack": "heroku-20",
+  "env": {
+    "DISCORD_TOKEN": {
+      "description": "Your Discord bot token",
+      "required": true
+    },
+    "LOG_LEVEL": {
+      "description": "Logging level (DEBUG, INFO, WARNING, ERROR)",
+      "value": "INFO",
+      "required": false
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ]
+}
